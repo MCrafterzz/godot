@@ -4537,6 +4537,15 @@ void CanvasItemEditor::_popup_callback(int p_op) {
 			undo_redo->add_undo_method(viewport, "update", Variant());
 			undo_redo->commit_action();
 		} break;
+		case TRANSFORM_DIALOG: {
+			for (int i = 0; i < 2; i++) {
+				xform_translate[i]->set_text("0");
+				xform_scale[i]->set_text("1");
+			}
+			xform_rotate[0]->set_text("0");
+
+			xform_dialog->popup_centered(Size2(320, 240) * EDSCALE);
+		} break;
 		case ANCHORS_AND_MARGINS_PRESET_TOP_LEFT: {
 			_set_anchors_and_margins_preset(PRESET_TOP_LEFT);
 		} break;
@@ -4938,6 +4947,54 @@ void CanvasItemEditor::_focus_selection(int p_op) {
 	}
 }
 
+void CanvasItemEditor::_xform_dialog_action() {
+	Transform2D t;
+	Vector2 scale;
+	int rotate;
+	Vector2 translate;
+
+	for (int i = 0; i < 2; i++) {
+		translate[i] = xform_translate[i]->get_text().to_double();
+		scale[i] = xform_scale[i]->get_text().to_double();
+	}
+	rotate = Math::deg2rad(xform_rotate[0]->get_text().to_double());
+
+	t.scale(scale);
+	t.rotate(rotate);
+	t.translate(translate.x, translate.y);
+
+	undo_redo->create_action(TTR("XForm Dialog"));
+
+	List<Node *> &selection = editor_selection->get_selected_node_list();
+
+	for (List<Node *>::Element *E = selection.front(); E; E = E->next()) {
+
+		CanvasItem *ci = Object::cast_to<CanvasItem>(E->get());
+		if (!ci)
+			continue;
+
+		CanvasItemEditorSelectedItem *se = editor_selection->get_node_editor_data<CanvasItemEditorSelectedItem>(ci);
+		if (!se)
+			continue;
+
+		bool post = xform_type->get_selected() > 0;
+
+		Transform2D tr = ci->get_global_transform();
+		if (post) {
+			tr.scale(scale);
+			tr.rotate(rotate);
+			tr.translate(translate.x, translate.y);
+		} else {
+			tr.translate(t.get_axis(0));
+			tr.set_origin(tr.get_origin() + t.get_origin());
+		}
+
+		undo_redo->add_do_method(ci, "set_global_transform", tr);
+		undo_redo->add_undo_method(ci, "set_global_transform", ci->get_global_transform());
+	}
+	undo_redo->commit_action();
+}
+
 void CanvasItemEditor::_bind_methods() {
 
 	ClassDB::bind_method("_button_zoom_minus", &CanvasItemEditor::_button_zoom_minus);
@@ -4951,6 +5008,7 @@ void CanvasItemEditor::_bind_methods() {
 	ClassDB::bind_method("_update_scroll", &CanvasItemEditor::_update_scroll);
 	ClassDB::bind_method("_update_scrollbars", &CanvasItemEditor::_update_scrollbars);
 	ClassDB::bind_method("_popup_callback", &CanvasItemEditor::_popup_callback);
+	ClassDB::bind_method("_xform_dialog_action", &CanvasItemEditor::_xform_dialog_action);
 	ClassDB::bind_method("_get_editor_data", &CanvasItemEditor::_get_editor_data);
 	ClassDB::bind_method("_button_tool_select", &CanvasItemEditor::_button_tool_select);
 	ClassDB::bind_method("_keying_changed", &CanvasItemEditor::_keying_changed);
@@ -5534,6 +5592,72 @@ CanvasItemEditor::CanvasItemEditor(EditorNode *p_editor) {
 	_update_override_camera_button(false);
 
 	hb->add_child(memnew(VSeparator));
+
+	/* XFORM DIALOG */
+
+	transform_button = memnew(ToolButton);
+	transform_button->set_text(TTR("Transform"));
+	hb->add_child(transform_button);
+	transform_button->connect("pressed", this, "_popup_callback", varray(TRANSFORM_DIALOG));
+
+	xform_dialog = memnew(ConfirmationDialog);
+	xform_dialog->set_title(TTR("Transform Change"));
+	add_child(xform_dialog);
+
+	VBoxContainer *xform_vbc = memnew(VBoxContainer);
+	xform_dialog->add_child(xform_vbc);
+
+	Label *l = memnew(Label);
+	l->set_text(TTR("Translate:"));
+	xform_vbc->add_child(l);
+
+	HBoxContainer *xform_hbc = memnew(HBoxContainer);
+	xform_vbc->add_child(xform_hbc);
+
+	for (int i = 0; i < 2; i++) {
+
+		xform_translate[i] = memnew(LineEdit);
+		xform_translate[i]->set_h_size_flags(SIZE_EXPAND_FILL);
+		xform_hbc->add_child(xform_translate[i]);
+	}
+
+	l = memnew(Label);
+	l->set_text(TTR("Rotate (deg.):"));
+	xform_vbc->add_child(l);
+
+	xform_hbc = memnew(HBoxContainer);
+	xform_vbc->add_child(xform_hbc);
+
+	xform_rotate[0] = memnew(LineEdit);
+	xform_rotate[0]->set_h_size_flags(SIZE_EXPAND_FILL);
+	xform_hbc->add_child(xform_rotate[0]);
+
+	l = memnew(Label);
+	l->set_text(TTR("Scale (ratio):"));
+	xform_vbc->add_child(l);
+
+	xform_hbc = memnew(HBoxContainer);
+	xform_vbc->add_child(xform_hbc);
+
+	for (int i = 0; i < 2; i++) {
+		xform_scale[i] = memnew(LineEdit);
+		xform_scale[i]->set_h_size_flags(SIZE_EXPAND_FILL);
+		xform_hbc->add_child(xform_scale[i]);
+	}
+
+	l = memnew(Label);
+	l->set_text(TTR("Transform Type"));
+	xform_vbc->add_child(l);
+
+	xform_type = memnew(OptionButton);
+	xform_type->set_h_size_flags(SIZE_EXPAND_FILL);
+	xform_type->add_item(TTR("Pre"));
+	xform_type->add_item(TTR("Post"));
+	xform_vbc->add_child(xform_type);
+
+	xform_dialog->connect("confirmed", this, "_xform_dialog_action");
+
+	/* END OF XFORM DIALOG */
 
 	view_menu = memnew(MenuButton);
 	view_menu->set_text(TTR("View"));
